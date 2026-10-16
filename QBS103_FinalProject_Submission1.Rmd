@@ -1,0 +1,164 @@
+---
+title: "QBS 103 Final Project - Submission 1"
+author: "Irene C"
+date: "Fall 2026"
+output:
+  pdf_document:
+    latex_engine: pdflatex
+---
+
+```{r setup, include=FALSE}
+# Show code in the PDF, hide package start-up messages, and use the cairo PDF device
+# so that special characters in the plots (e.g., the "greater than or equal to" sign) render correctly
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      dev = "cairo_pdf", fig.align = "center")
+```
+
+# Submission Notes
+
+Collaborators: none  
+Additional resources used: course materials; ggplot2 documentation (https://ggplot2.tidyverse.org); data source: Gonzalez-Vazquez et al. / GSE85307, https://pubmed.ncbi.nlm.nih.gov/27841759/
+
+# Choice of gene and covariates
+
+* **Gene:** *LYN* (Affymetrix probe 8146500), an immune-cell signaling kinase.
+* **Continuous covariate:** maternal vitamin D (25-hydroxyvitamin D, ng/mL), `mat_vitD`.
+* **Categorical covariate 1:** pregnancy outcome (Normal vs. Preeclampsia), `preg_preeclampsia`.
+* **Categorical covariate 2 (derived from a continuous variable):** maternal obesity status
+  (BMI < 30 vs. BMI >= 30 kg/m^2), created from `mat_BMI`.
+
+# Load and wrangle the data
+
+All wrangling is done in R, starting from the original, unmodified files provided on Canvas
+(the three .csv files must be in the same folder as this .Rmd).
+
+```{r load-data}
+library(ggplot2)
+
+# ---- Read the three original files exactly as provided ----
+covar <- read.csv("GSE85307_covar.csv", check.names = FALSE, stringsAsFactors = FALSE)
+expr  <- read.csv("GSE85307_geneExpression.csv", check.names = FALSE, stringsAsFactors = FALSE)
+genes <- read.csv("GSE85307_geneNames.csv", colClasses = "character")
+
+# The first column of the covariate file carries a hidden byte-order mark; rename it cleanly
+names(covar)[1] <- "subjectID"
+
+# In the expression file the first (unnamed) column holds the probe IDs: use it as row names
+rownames(expr) <- expr[[1]]
+expr <- expr[, -1]
+
+# ---- Clean the covariate values ----
+# Every covariate value is stored as text such as "age_years: 31.06"; keep only the part after ": "
+for (v in names(covar)[3:ncol(covar)]) covar[[v]] <- sub("^[^:]*: ", "", covar[[v]])
+
+# Convert the continuous covariates to numbers
+num_vars <- c("mat_age_yrs", "delivery_gestAge_wks", "sampleCollection_gestAge_wks",
+              "mat_BMI", "mat_vitD")
+for (v in num_vars) covar[[v]] <- as.numeric(covar[[v]])
+
+# ---- Match the covariates to the expression columns using geoID ----
+# Put the covariate rows in the same order as the columns of the expression matrix
+covar <- covar[match(colnames(expr), covar$geoID), ]
+
+# Verify the matching: no sample is missing and every row lines up with its expression column
+stopifnot(!any(is.na(covar$geoID)), all(covar$geoID == colnames(expr)))
+cat("Samples matched:", nrow(covar), "of", ncol(expr), "expression columns\n")
+
+# ---- Pull out the gene of interest using the probe-to-gene linker file ----
+gene_of_interest <- "LYN"
+probe <- genes$PROBEID[genes$GENE == gene_of_interest]
+stopifnot(length(probe) == 1, probe %in% rownames(expr))   # exactly one probe, present in the data
+
+# ---- Build the analysis data frame (one row per sample) ----
+dat <- data.frame(
+  geoID      = covar$geoID,
+  expression = as.numeric(expr[probe, ]),        # log2 expression of LYN
+  vitD       = covar$mat_vitD,                   # continuous covariate
+  outcome    = factor(covar$preg_preeclampsia, levels = c("Normal", "Preeclampsia")),
+  BMI        = covar$mat_BMI
+)
+
+# Derived categorical variable: obesity status from BMI (obese is BMI >= 30 kg/m^2)
+dat$obesity <- factor(ifelse(dat$BMI >= 30, "BMI >= 30", "BMI < 30"),
+                      levels = c("BMI < 30", "BMI >= 30"))
+
+# Quick checks without printing the whole data frame
+dim(dat)
+colSums(is.na(dat))                    # no missing values in the variables used
+table(dat$outcome, dat$obesity)        # sample size in each boxplot group
+```
+
+```{r theme}
+# One shared, clean theme for all three figures (white background, no grid, readable text)
+theme_pub <- theme_classic(base_size = 13) +
+  theme(plot.title    = element_text(face = "bold", size = 14),
+        axis.title    = element_text(face = "bold"),
+        axis.text     = element_text(colour = "black"),
+        legend.title  = element_text(face = "bold"),
+        legend.position = "right")
+
+# Colorblind-friendly colors used consistently across figures
+col_main <- "#0072B2"                                               # histogram / scatter
+col_obes <- c("BMI < 30" = "#56B4E9", "BMI >= 30" = "#D55E00")      # boxplot groups
+```
+
+# Figure 1. Histogram of *LYN* gene expression
+
+```{r fig1, fig.width=6, fig.height=4}
+# Histogram of LYN expression with a dashed line at the mean
+ggplot(dat, aes(x = expression)) +
+  geom_histogram(bins = 20, fill = col_main, colour = "white") +
+  geom_vline(xintercept = mean(dat$expression), linetype = "dashed", linewidth = 0.8) +
+  labs(title = "Distribution of LYN expression",
+       x = "LYN expression (log2 intensity)",
+       y = "Number of samples") +
+  theme_pub
+```
+
+**Figure 1.** Distribution of *LYN* expression (log2 intensity) in whole-blood samples from
+`r nrow(dat)` pregnant women. The dashed line marks the mean (`r round(mean(dat$expression), 2)`).
+
+# Figure 2. *LYN* expression vs. maternal vitamin D
+
+```{r fig2, fig.width=6, fig.height=4}
+# Pearson correlation to annotate the plot
+ct <- cor.test(dat$vitD, dat$expression)
+lab <- sprintf("r = %.2f, p %s", ct$estimate,
+               ifelse(ct$p.value < 0.001, "< 0.001", sprintf("= %.3f", ct$p.value)))
+
+# Scatterplot with a linear fit and 95% confidence band
+ggplot(dat, aes(x = vitD, y = expression)) +
+  geom_point(colour = col_main, alpha = 0.7, size = 2) +
+  geom_smooth(method = "lm", formula = y ~ x, colour = "black", fill = "grey70") +
+  annotate("text", x = min(dat$vitD), y = max(dat$expression), label = lab,
+           hjust = 0, vjust = 1, size = 4) +
+  labs(title = "LYN expression vs. maternal vitamin D",
+       x = "Maternal vitamin D, 25-hydroxyvitamin D (ng/mL)",
+       y = "LYN expression (log2 intensity)") +
+  theme_pub
+```
+
+**Figure 2.** Association between maternal vitamin D (ng/mL) and *LYN* expression (log2 intensity).
+Each point is one woman; the line is the linear fit with its 95% confidence band
+(`r lab`).
+
+# Figure 3. *LYN* expression by pregnancy outcome and obesity status
+
+```{r fig3, fig.width=6.5, fig.height=4.5}
+# Boxplot of LYN expression by pregnancy outcome, split by obesity status (derived from BMI),
+# with the individual samples overlaid so the group sizes and spread are visible
+ggplot(dat, aes(x = outcome, y = expression, fill = obesity)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8, width = 0.7,
+               position = position_dodge(width = 0.8)) +
+  geom_point(aes(group = obesity), position = position_jitterdodge(jitter.width = 0.15,
+             dodge.width = 0.8), size = 1.4, alpha = 0.6) +
+  scale_fill_manual(values = col_obes, name = "Obesity status") +
+  labs(title = "LYN expression by pregnancy outcome and obesity status",
+       x = "Pregnancy outcome",
+       y = "LYN expression (log2 intensity)") +
+  theme_pub
+```
+
+**Figure 3.** *LYN* expression (log2 intensity) by pregnancy outcome (Normal vs. Preeclampsia)
+and maternal obesity status (BMI < 30 vs. >= 30 kg/m^2). Boxes show the median and interquartile range,
+whiskers extend to 1.5 times the interquartile range, and points are individual samples.
