@@ -1,0 +1,267 @@
+---
+title: "QBS 103 Final Project - Submission 2"
+author: "Irene Chen"
+date: "Fall 2026"
+output:
+  pdf_document:
+    latex_engine: pdflatex
+---
+
+```{r setup, include=FALSE}
+# Show code in the PDF and hide package start-up messages
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center")
+```
+
+# Submission Notes
+
+Collaborators: none
+Additional resources used: course materials; google; ggplot2 documentation (https://ggplot2.tidyverse.org); data source: Gonzalez-Vazquez et al. / GSE85307, https://pubmed.ncbi.nlm.nih.gov/27841759/
+
+# Choice of genes and covariates
+
+* **Genes:** *LYN* (Affymetrix probe 8146500; an immune-cell signaling kinase), *JAK2* (a kinase in cytokine signaling) and *PTX3* (pentraxin 3, an inflammatory response protein). I chose genes related to immune and inflammatory processes because preeclampsia is associated with maternal immune and inflammatory changes.
+* **Continuous covariate:** maternal vitamin D (25-hydroxyvitamin D, ng/mL), `mat_vitD`.
+* **Categorical covariate 1:** pregnancy outcome (Normal vs. Preeclampsia), `preg_preeclampsia`.
+* **Categorical covariate 2 (derived from a continuous variable):** maternal obesity status
+  (BMI < 30 vs. BMI >= 30 kg/m^2), created from `mat_BMI`.
+
+# Load and wrangle the data
+
+All wrangling is done in R, starting from the original, unmodified files provided on Canvas
+(the three .csv files must be in the same folder as this .Rmd).
+
+```{r load-data}
+library(ggplot2)
+
+# ---- Read the three original files as provided ----
+covar <- read.csv("GSE85307_covar.csv", check.names = FALSE, stringsAsFactors = FALSE)
+expr  <- read.csv("GSE85307_geneExpression.csv", check.names = FALSE, stringsAsFactors = FALSE)
+genes_link <- read.csv("GSE85307_geneNames.csv", colClasses = "character")
+
+# The first column of the covariate file carries a hidden byte-order mark; rename it cleanly
+names(covar)[1] <- "subjectID"
+
+# In the expression file the first (unnamed) column holds the probe IDs: use it as row names
+rownames(expr) <- expr[[1]]
+expr <- expr[, -1]
+
+# ---- Clean the covariate values ----
+# Every covariate value is stored as text such as "age_years: 31.06"; keep only the part after ": "
+for (v in names(covar)[3:ncol(covar)]) {
+  covar[[v]] <- sub("^[^:]*: ", "", covar[[v]])
+}
+
+# Convert the continuous covariates to numbers
+num_vars <- c("mat_age_yrs", "delivery_gestAge_wks", "sampleCollection_gestAge_wks",
+              "mat_BMI", "mat_vitD")
+for (v in num_vars) {
+  covar[[v]] <- as.numeric(covar[[v]])
+}
+
+# ---- Match the covariates to the expression columns using geoID ----
+# Put the covariate rows in the same order as the columns of the expression matrix
+covar <- covar[match(colnames(expr), covar$geoID), ]
+
+# Verify the matching: no sample is missing and every row lines up with its expression column
+stopifnot(!any(is.na(covar$geoID)), all(covar$geoID == colnames(expr)))
+cat("Samples matched:", nrow(covar), "of", ncol(expr), "expression columns\n")
+
+# ---- Build the analysis data frame (one row per sample, one column per gene) ----
+gene_names <- c("LYN", "JAK2", "PTX3")
+
+dat <- data.frame(
+  geoID   = covar$geoID,
+  vitD    = covar$mat_vitD,                      # continuous covariate
+  outcome = factor(covar$preg_preeclampsia, levels = c("Normal", "Preeclampsia")),
+  BMI     = covar$mat_BMI
+)
+
+# Add the expression of each selected gene as its own column, using the probe-to-gene linker
+for (g in gene_names) {
+  probe <- genes_link$PROBEID[genes_link$GENE == g]
+  # exactly one probe per gene, and it must be present in the expression data
+  stopifnot(length(probe) == 1, probe %in% rownames(expr))
+  dat[[g]] <- as.numeric(expr[probe, ])
+}
+
+# Derived categorical variable: obesity status from BMI (obese is BMI >= 30 kg/m^2)
+dat$obesity <- factor(ifelse(dat$BMI >= 30, "BMI >= 30", "BMI < 30"),
+                      levels = c("BMI < 30", "BMI >= 30"))
+
+# Quick checks without printing the whole data frame
+dim(dat)
+colSums(is.na(dat))                    # no missing values in the variables used
+table(dat$outcome, dat$obesity)        # sample size in each boxplot group
+```
+
+# The plotting function
+
+```{r theme}
+# One shared, clean theme for all figures (white background, no grid, readable text)
+theme_pub <- theme_classic(base_size = 13) +
+  theme(plot.title    = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(size = 11),
+        axis.title    = element_text(face = "bold"),
+        axis.text     = element_text(colour = "black"),
+        legend.title  = element_text(face = "bold"),
+        legend.position = "right")
+```
+
+The function `make_gene_plots()` takes (1) a data frame, (2) a vector of one or more gene names
+(column names of the data frame), (3) the name of one continuous covariate and (4) the names of two
+categorical covariates. For every gene it returns a histogram, a scatterplot against the continuous
+covariate, and a boxplot split by both categorical covariates.
+
+```{r function}
+make_gene_plots <- function(data, genes, cont_var, cat_vars, labels = NULL) {
+  # data     : data frame with one row per sample
+  # genes    : character vector of gene names (columns holding the expression values)
+  # cont_var : name of the continuous covariate (used on the x-axis of the scatterplot)
+  # cat_vars : names of 2 categorical covariates (1st = x-axis, 2nd = fill color of the boxplot)
+  # labels   : optional named character vector giving nicer axis labels for the covariates
+  # Returns a list with one element per gene; each element holds the three ggplot objects.
+
+  # ---- Check the inputs ----
+  stopifnot(is.data.frame(data),
+            is.character(genes), length(genes) >= 1,
+            all(genes %in% names(data)),
+            length(cont_var) == 1, cont_var %in% names(data), is.numeric(data[[cont_var]]),
+            length(cat_vars) == 2, all(cat_vars %in% names(data)))
+
+  # Helper: pretty label for a covariate (falls back to the variable name)
+  get_label <- function(x) {
+    if (!is.null(labels) && x %in% names(labels)) {
+      labels[[x]]
+    } else {
+      x
+    }
+  }
+
+  # Colorblind-friendly colors for the levels of the 2nd categorical covariate
+  fill_levels <- levels(factor(data[[cat_vars[2]]]))
+  stopifnot(length(fill_levels) <= 4)
+  fill_cols <- setNames(c("#56B4E9", "#D55E00", "#009E73", "#E69F00")[seq_along(fill_levels)],
+                        fill_levels)
+
+  plots <- list()
+
+  # ---- Make the three plots for each gene ----
+  for (g in genes) {
+    # Keep only the samples that have all the variables needed for this gene
+    d <- data[complete.cases(data[, c(g, cont_var, cat_vars)]), ]
+    d[[cat_vars[1]]] <- factor(d[[cat_vars[1]]])
+    d[[cat_vars[2]]] <- factor(d[[cat_vars[2]]])
+    y_lab <- paste0(g, " expression (log2 intensity)")
+
+    # 1. Histogram of gene expression with a dashed line at the mean
+    p_hist <- ggplot(d, aes(x = .data[[g]])) +
+      geom_histogram(bins = 20, fill = "#0072B2", colour = "white") +
+      geom_vline(xintercept = mean(d[[g]]), linetype = "dashed", linewidth = 0.8) +
+      labs(title = paste("Distribution of", g, "expression"),
+           subtitle = sprintf("n = %d, mean = %.2f (dashed line)", nrow(d), mean(d[[g]])),
+           x = y_lab, y = "Number of samples") +
+      theme_pub
+
+    # 2. Scatterplot of expression vs. the continuous covariate.
+    #    The correlation is written in the subtitle (above the panel) so that it can
+    #    never overlap with any of the points.
+    ct <- cor.test(d[[cont_var]], d[[g]])
+    p_txt <- ifelse(ct$p.value < 0.001, "< 0.001", sprintf("= %.3f", ct$p.value))
+    p_scatter <- ggplot(d, aes(x = .data[[cont_var]], y = .data[[g]])) +
+      geom_point(colour = "#0072B2", alpha = 0.7, size = 2) +
+      geom_smooth(method = "lm", formula = y ~ x, colour = "black", fill = "grey70") +
+      labs(title = paste(g, "expression vs.", get_label(cont_var)),
+           subtitle = sprintf("Pearson r = %.2f, p %s", ct$estimate, p_txt),
+           x = get_label(cont_var), y = y_lab) +
+      theme_pub
+
+    # 3. Boxplot of expression by both categorical covariates, with the samples overlaid
+    p_box <- ggplot(d, aes(x = .data[[cat_vars[1]]], y = .data[[g]], fill = .data[[cat_vars[2]]])) +
+      geom_boxplot(outlier.shape = NA, alpha = 0.8, width = 0.7,
+                   position = position_dodge(width = 0.8)) +
+      geom_point(aes(group = .data[[cat_vars[2]]]),
+                 position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+                 size = 1.4, alpha = 0.6) +
+      scale_fill_manual(values = fill_cols, name = get_label(cat_vars[2])) +
+      labs(title = paste(g, "expression by", tolower(get_label(cat_vars[1])), "and",
+                         tolower(get_label(cat_vars[2]))),
+           x = get_label(cat_vars[1]), y = y_lab) +
+      theme_pub
+
+    plots[[g]] <- list(histogram = p_hist, scatter = p_scatter, boxplot = p_box)
+  }
+
+  return(plots)
+}
+```
+
+```{r run-function}
+# Nicer axis labels for the covariates (only used for the text on the plots)
+cov_labels <- c(vitD = "Maternal vitamin D (ng/mL)",
+                outcome = "Pregnancy outcome",
+                obesity = "Obesity status")
+
+# Call the function once for all three genes
+all_plots <- make_gene_plots(data = dat,
+                             genes = gene_names,
+                             cont_var = "vitD",
+                             cat_vars = c("outcome", "obesity"),
+                             labels = cov_labels)
+```
+
+# Histograms of gene expression
+
+```{r fig1, fig.width=6, fig.height=3.2, fig.cap=paste0("Distribution of ", gene_names, " expression (log2 intensity) in whole-blood samples from ", nrow(dat), " pregnant women. The dashed line marks the mean.")}
+# Show the histogram of each gene (the same loop works for any number of genes)
+for (g in gene_names) {
+  print(all_plots[[g]]$histogram)
+}
+```
+
+# Gene expression vs. maternal vitamin D
+
+```{r fig2, fig.width=6, fig.height=3.4, fig.cap=paste0("Association between maternal vitamin D (ng/mL) and ", gene_names, " expression (log2 intensity). Each point is one woman; the line is the linear fit with its 95% confidence band; the Pearson correlation is given above the plot.")}
+for (g in gene_names) {
+  print(all_plots[[g]]$scatter)
+}
+```
+
+# Gene expression by pregnancy outcome and obesity status
+
+```{r fig3, fig.width=6.5, fig.height=3.6, fig.cap=paste0(gene_names, " expression (log2 intensity) by pregnancy outcome (Normal vs. Preeclampsia) and maternal obesity status (BMI < 30 vs. >= 30 kg/m$^2$). Boxes show the median and interquartile range, whiskers extend to 1.5 times the interquartile range, and points are individual samples.")}
+for (g in gene_names) {
+  print(all_plots[[g]]$boxplot)
+}
+```
+
+# Comparison across the three genes
+
+```{r comparison}
+# One summary row per gene: distribution of expression and association with vitamin D
+comp <- data.frame(
+  Gene = gene_names,
+  Mean = sapply(gene_names, function(g) mean(dat[[g]])),
+  SD   = sapply(gene_names, function(g) sd(dat[[g]])),
+  r_vitD = sapply(gene_names, function(g) cor(dat$vitD, dat[[g]])),
+  p_vitD = sapply(gene_names, function(g) cor.test(dat$vitD, dat[[g]])$p.value),
+  row.names = NULL
+)
+comp$p_vitD <- ifelse(comp$p_vitD < 0.001, "< 0.001", sprintf("%.3f", comp$p_vitD))
+knitr::kable(comp, digits = 2,
+             col.names = c("Gene", "Mean", "SD", "r (vitamin D)", "p"),
+             caption = "Summary of the three genes: expression (log2 intensity) and correlation with maternal vitamin D.")
+```
+
+```{r comparison-text, include=FALSE}
+# Median expression by obesity status for each gene (used in the sentence below)
+med_diff <- sapply(gene_names, function(g) {
+  median(dat[[g]][dat$obesity == "BMI >= 30"]) - median(dat[[g]][dat$obesity == "BMI < 30"])
+})
+```
+
+Across the three genes, the histograms show how the expression of each gene is spread (Figures 1-3), the
+scatterplots show whether it moves with vitamin D (Figures 4-6; Pearson r = `r paste(sprintf("%.2f", comp$r_vitD), collapse = ", ")`
+for `r paste(gene_names, collapse = ", ")`), and the boxplots show how it differs between the obesity groups within each pregnancy outcome
+(Figures 7-9). The median difference in expression (BMI >= 30 minus BMI < 30, in the whole sample) is
+`r paste(sprintf("%.2f", med_diff), collapse = ", ")` for `r paste(gene_names, collapse = ", ")`, respectively. These are descriptive
+comparisons only. Note that each gene has its own y-axis range, so the heights of the plots should not be compared directly between genes.
