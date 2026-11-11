@@ -1,0 +1,330 @@
+---
+title: "QBS 103 Final Project - Analysis Code"
+author: "Irene Chen"
+date: "Fall 2026"
+output: pdf_document
+geometry: margin=1in
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{fvextra}
+  - \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center",
+                      out.width = "100%")   # shrink every figure to the page width
+```
+
+# Submission Notes
+
+Collaborators: none
+Additional resources used: course materials; ggplot2 documentation (https://ggplot2.tidyverse.org); data source: Mirzakhani et al. (2016), GSE85307, https://pubmed.ncbi.nlm.nih.gov/27841759/
+This file makes all figures and the summary table. The figures (folder `figures/`) and the
+table (`table1.tex`) are uploaded to Overleaf, where the final report is written.
+
+# Packages and seed
+
+```{r packages}
+library(ggplot2)    # all plots except the heatmap
+library(ggpubr)     # ggarrange(): put plots together in panels A, B, C
+library(pheatmap)   # heatmap with clustering and tracking bars
+library(knitr)      # kable(): LaTeX table
+
+# Seed so the random jitter in the boxplot is the same every time
+set.seed(103)
+
+# Folder for the figure files that go to Overleaf
+dir.create("figures", showWarnings = FALSE)
+```
+
+# Load and wrangle the data
+
+All wrangling starts from the original files provided on Canvas (the three .csv files must be
+in the same folder as this .Rmd).
+
+```{r load-data}
+# Read the csv files
+covar <- read.csv("GSE85307_covar.csv", check.names = FALSE)
+expr  <- read.csv("GSE85307_geneExpression.csv", check.names = FALSE)
+genes_link <- read.csv("GSE85307_geneNames.csv", colClasses = "character")
+
+# The first column of the expression file has the probe IDs: use them as row names
+rownames(expr) <- expr[[1]]
+expr <- expr[, -1]
+
+# Remove the label before ": " (e.g. "age_years: 31.06" -> "31.06")
+for (v in names(covar)[3:ncol(covar)]) {
+  covar[[v]] <- sub("^[^:]*: ", "", covar[[v]])
+}
+
+# Change the continuous covariates from text to numbers
+num_vars <- c("mat_age_yrs", "delivery_gestAge_wks", "sampleCollection_gestAge_wks",
+              "mat_BMI", "mat_vitD")
+for (v in num_vars) {
+  covar[[v]] <- as.numeric(covar[[v]])
+}
+
+# Match covariates to the expression columns using geoID
+covar <- covar[match(colnames(expr), covar$geoID), ]
+
+# Check the matching: should print TRUE (every row lines up with its expression column)
+all(covar$geoID == colnames(expr))
+
+# Initial size of the data: number of probes and samples
+dim(expr)
+```
+
+```{r build-data}
+# The three genes from Submissions 1 and 2
+gene_names <- c("LYN", "JAK2", "PTX3")
+
+# Analysis data frame: one row per woman
+dat <- data.frame(
+  geoID   = covar$geoID,
+  vitD    = covar$mat_vitD,                 # continuous covariate of interest
+  age     = covar$mat_age_yrs,              # extra continuous covariate 1
+  gestAge = covar$delivery_gestAge_wks,     # extra continuous covariate 2
+  BMI     = covar$mat_BMI,
+  outcome = factor(covar$preg_preeclampsia, levels = c("Normal", "Preeclampsia"))
+)
+
+# Derived categorical covariate: obesity status from BMI (obese = BMI >= 30 kg/m^2)
+dat$obesity <- factor(ifelse(dat$BMI >= 30, "Obese", "Not obese"),
+                      levels = c("Not obese", "Obese"))
+
+# Add the expression of each gene as a column, using the probe-to-gene linker file
+for (g in gene_names) {
+  probe <- genes_link$PROBEID[genes_link$GENE == g][1]
+  dat[[g]] <- as.numeric(expr[probe, ])
+}
+
+sum(is.na(dat))                    # should be 0: no samples removed
+table(dat$outcome, dat$obesity)    # group sizes
+```
+
+```{r theme}
+# One clean theme for all ggplot figures (no main title: figures are described in the legends)
+theme_pub <- theme_classic(base_size = 12) +
+  theme(axis.title   = element_text(face = "bold"),
+        axis.text    = element_text(colour = "black"),
+        legend.title = element_text(face = "bold"))
+
+# Colors used in every figure
+col_main    <- "#0072B2"
+col_obesity <- c("Not obese" = "#56B4E9", "Obese" = "#D55E00")
+col_outcome <- c("Normal" = "#009E73", "Preeclampsia" = "#CC79A7")
+```
+
+# Table 1. Summary statistics
+
+```{r table1}
+# Helpers: mean (SD) and n (%) as text
+mean_sd <- function(x) {
+  sprintf("%.1f (%.1f)", mean(x), sd(x))
+}
+n_pct <- function(x, level) {
+  sprintf("%d (%.1f)", sum(x == level), 100 * mean(x == level))
+}
+
+# Split the data by pregnancy outcome
+normal <- dat[dat$outcome == "Normal", ]
+pe     <- dat[dat$outcome == "Preeclampsia", ]
+
+# Build the table one row at a time (LaTeX symbols are used in the row names)
+tab <- data.frame(
+  Variable = c("Maternal vitamin D (ng/mL), mean (SD)",
+               "Maternal age (years), mean (SD)",
+               "Gestational age at delivery (weeks), mean (SD)",
+               "Obesity status, n (\\%)",
+               "\\quad Not obese (BMI $<$ 30)",
+               "\\quad Obese (BMI $\\geq$ 30)"),
+  Normal = c(mean_sd(normal$vitD), mean_sd(normal$age), mean_sd(normal$gestAge),
+             "", n_pct(normal$obesity, "Not obese"), n_pct(normal$obesity, "Obese")),
+  Preeclampsia = c(mean_sd(pe$vitD), mean_sd(pe$age), mean_sd(pe$gestAge),
+                   "", n_pct(pe$obesity, "Not obese"), n_pct(pe$obesity, "Obese")),
+  Overall = c(mean_sd(dat$vitD), mean_sd(dat$age), mean_sd(dat$gestAge),
+              "", n_pct(dat$obesity, "Not obese"), n_pct(dat$obesity, "Obese"))
+)
+names(tab) <- c("Variable",
+                paste0("Normal (n = ", nrow(normal), ")"),
+                paste0("Preeclampsia (n = ", nrow(pe), ")"),
+                paste0("Overall (n = ", nrow(dat), ")"))
+
+# LaTeX table; escape = FALSE keeps the LaTeX symbols; label gives \label{tab:summary}
+table1 <- kable(tab, format = "latex", booktabs = TRUE, escape = FALSE, align = "lccc",
+                label = "summary",
+                caption = paste("Characteristics of the study participants",
+                                "by pregnancy outcome. Continuous variables are",
+                                "mean (standard deviation); categorical variables",
+                                "are n (\\%)."))
+
+# Save the table for Overleaf (\input{table1.tex}) and show it here
+writeLines(table1, "table1.tex")
+table1
+```
+
+# Figure 1. *LYN*: histogram, scatterplot and boxplot
+
+```{r fig1, fig.width=10, fig.height=8}
+# Pearson correlation between vitamin D and LYN
+ct <- cor.test(dat$vitD, dat$LYN)
+r_txt <- sprintf("%.2f", ct$estimate)
+p_txt <- ifelse(ct$p.value < 0.001, "< 0.001", sprintf("= %.3f", ct$p.value))
+
+# Axis label with only the gene name in italics
+lyn_lab <- bquote(italic("LYN") ~ "expression (log"[2] ~ "intensity)")
+
+# (A) Histogram with a dashed line at the mean
+p_hist <- ggplot(dat, aes(x = LYN)) +
+  geom_histogram(bins = 20, fill = col_main, colour = "white") +
+  geom_vline(xintercept = mean(dat$LYN), linetype = "dashed", linewidth = 0.8) +
+  labs(x = lyn_lab, y = "Number of women") +
+  theme_pub
+
+# (B) Scatterplot. The correlation label is placed above the highest point
+#     so it cannot overlap any point.
+label_y <- max(dat$LYN) + 0.20 * (max(dat$LYN) - min(dat$LYN))
+
+p_scatter <- ggplot(dat, aes(x = vitD, y = LYN)) +
+  geom_point(colour = col_main, alpha = 0.7, size = 2) +
+  geom_smooth(method = "lm", formula = y ~ x, colour = "black", fill = "grey70") +
+  annotate("text", x = min(dat$vitD), y = label_y, hjust = 0, vjust = 1, size = 4,
+           label = paste0("Pearson r = ", r_txt, ", p ", p_txt)) +
+  labs(x = "Maternal vitamin D (ng/mL)", y = lyn_lab) +
+  theme_pub
+
+# (C) Boxplot by outcome and obesity with jittered points (random jitter: seed set above)
+p_box <- ggplot(dat, aes(x = outcome, y = LYN, fill = obesity)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8, width = 0.7,
+               position = position_dodge(width = 0.8)) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+             size = 1.4, alpha = 0.6) +
+  scale_fill_manual(values = col_obesity, name = "Obesity status") +
+  labs(x = "Pregnancy outcome", y = lyn_lab) +
+  theme_pub
+
+# Combine into one figure with panels A, B, C
+top_row <- ggarrange(p_hist, p_scatter, ncol = 2, labels = c("A", "B"))
+fig1 <- ggarrange(top_row, p_box, nrow = 2, labels = c("", "C"))
+fig1
+
+# Save for Overleaf
+ggsave("figures/Figure1_LYN.pdf", fig1, width = 10, height = 8)
+```
+
+# Figure 2. Heatmap of ten genes
+
+```{r heatmap-data}
+# Genes: the 3 genes above + the 7 most variable named genes in the data
+# (picking from the data guarantees that every gene exists and has no missing values)
+
+# Gene name and standard deviation of every probe
+probe_gene <- genes_link$GENE[match(rownames(expr), genes_link$PROBEID)]
+probe_sd   <- apply(as.matrix(expr), 1, sd)
+
+# Keep probes with a real gene name and some variation, that are not our 3 genes
+ok <- !is.na(probe_gene) & probe_gene != "" & probe_gene != "---" &
+      !is.na(probe_sd) & probe_sd > 0 &
+      !(probe_gene %in% gene_names)
+
+# Sort from most to least variable, keep one probe per gene, take the first 7
+cand_probes  <- rownames(expr)[ok][order(probe_sd[ok], decreasing = TRUE)]
+cand_genes   <- probe_gene[match(cand_probes, rownames(expr))]
+extra_probes <- cand_probes[!duplicated(cand_genes)][1:7]
+extra_genes  <- cand_genes[!duplicated(cand_genes)][1:7]
+
+# Probes for our 3 genes + the 7 extra genes
+main_probes <- genes_link$PROBEID[match(gene_names, genes_link$GENE)]
+heat_genes  <- c(gene_names, extra_genes)
+heat_probes <- c(main_probes, extra_probes)
+heat_genes
+
+# Expression matrix: genes in rows, women in columns
+heat_mat <- as.matrix(expr[heat_probes, ])
+rownames(heat_mat) <- heat_genes
+
+# Tracking bars: one row per woman (row names = sample IDs)
+annot <- data.frame(Outcome = dat$outcome, Obesity = dat$obesity)
+rownames(annot) <- dat$geoID
+annot_cols <- list(Outcome = col_outcome, Obesity = col_obesity)
+```
+
+```{r fig2, fig.width=10, fig.height=5.5}
+hm <- pheatmap(heat_mat,
+               scale = "row",                       # z-score each gene
+               # clustering uses the defaults: Euclidean distance, complete linkage
+               annotation_col = annot,              # tracking bars
+               annotation_colors = annot_cols,
+               show_colnames = FALSE,               # 157 sample IDs would be unreadable
+               # italic gene names
+               labels_row = parse(text = paste0("italic('", heat_genes, "')")),
+               color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+               border_color = NA,
+               fontsize = 11)
+
+# Save for Overleaf
+ggsave("figures/Figure2_heatmap.pdf", hm$gtable, width = 10, height = 5.5)
+```
+
+# Figure 3. Dumbbell plot (additional plot type)
+
+```{r fig3, fig.width=7, fig.height=4.5}
+# z-score each gene across all women so genes on different scales can be compared
+z_mat <- t(scale(t(heat_mat)))
+
+# Mean z-score of each gene in each outcome group
+db <- data.frame(
+  gene         = heat_genes,
+  Normal       = rowMeans(z_mat[, dat$outcome == "Normal"]),
+  Preeclampsia = rowMeans(z_mat[, dat$outcome == "Preeclampsia"])
+)
+db$diff <- db$Preeclampsia - db$Normal
+
+# Order the genes by the difference (largest increase in preeclampsia at the top)
+db$gene <- factor(db$gene, levels = db$gene[order(db$diff)])
+
+# Long format for the two colored points
+db_long <- data.frame(
+  gene    = rep(db$gene, 2),
+  outcome = factor(rep(c("Normal", "Preeclampsia"), each = nrow(db)),
+                   levels = c("Normal", "Preeclampsia")),
+  mean_z  = c(db$Normal, db$Preeclampsia)
+)
+
+fig3 <- ggplot() +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_segment(data = db, aes(x = Normal, xend = Preeclampsia, y = gene, yend = gene),
+               colour = "grey50", linewidth = 1.2) +
+  geom_point(data = db_long, aes(x = mean_z, y = gene, colour = outcome), size = 3.5) +
+  scale_colour_manual(values = col_outcome, name = "Pregnancy outcome") +
+  labs(x = "Mean expression (z-score)", y = "Gene") +
+  theme_pub +
+  theme(axis.text.y = element_text(face = "italic"))   # italic gene names
+fig3
+
+# Save for Overleaf
+ggsave("figures/Figure3_dumbbell.pdf", fig3, width = 7, height = 4.5)
+```
+
+# Numbers used in the report
+
+```{r numbers}
+# Data size
+nrow(expr)                              # number of probes
+nrow(dat)                               # final sample size
+
+# Table 1 means
+c(vitD_normal = mean(normal$vitD), vitD_pe = mean(pe$vitD))
+c(gestAge_normal = mean(normal$gestAge), gestAge_pe = mean(pe$gestAge))
+
+# Figure 1
+mean(dat$LYN)                           # mean LYN expression
+c(r = ct$estimate, p = ct$p.value)      # correlation with vitamin D
+tapply(dat$LYN, list(dat$outcome, dat$obesity), median)   # boxplot medians
+
+# Figure 2: the ten genes
+heat_genes
+
+# Figure 3: difference in mean z-score (Preeclampsia - Normal), sorted
+db[order(db$diff, decreasing = TRUE), c("gene", "diff")]
+```
