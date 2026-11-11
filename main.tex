@@ -1,0 +1,141 @@
+\documentclass[11pt]{article}
+
+% ---- Packages ----
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}      % figures
+\usepackage{booktabs}      % table lines from kable (booktabs = TRUE)
+\usepackage{float}         % [H] keeps figures where they are written
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{hyperref}
+
+
+\title{Maternal Vitamin D, Obesity and Immune Gene Expression in Preeclampsia}
+\author{Irene Chen \\ QBS 103 Final Project}
+\date{Fall 2026}
+
+\begin{document}
+\maketitle
+
+% =====================================================================
+\section{Methods}
+
+\paragraph{Data source.}
+Data came from a nested case-control study within the Vitamin D Antenatal Asthma Reduction
+Trial (VDAART) \cite{mirzakhani2016}, available in the Gene Expression Omnibus as GSE85307.
+Peripheral whole-blood gene expression was measured at 10--18 weeks of gestation with the
+Affymetrix Human Gene 1.0 ST Array; values are on the log$_2$ scale (range 3.1--13.2). The
+initial data set contained 157 samples and 500 probes. Covariates were
+matched to the expression data by GEO sample ID, and all 157 samples matched. Probe IDs were
+linked to gene symbols with the provided linker file.
+
+\paragraph{Final sample size.}
+No samples had missing values for the variables analyzed, so no data points were removed. The
+final sample size was 157 women: 110 with normal pregnancies and 47 who developed preeclampsia.
+
+\paragraph{Variables.}
+The genes of interest were \textit{LYN}, \textit{JAK2} and \textit{PTX3}, chosen because
+preeclampsia involves maternal immune and inflammatory changes. The continuous covariate of
+interest was maternal 25-hydroxyvitamin D (ng/mL). The categorical covariates were pregnancy
+outcome (normal vs.\ preeclampsia) and maternal obesity status (not obese, BMI $<$ 30 kg/m$^2$;
+obese, BMI $\geq$ 30 kg/m$^2$), derived from continuous BMI. Maternal age (years) and
+gestational age at delivery (weeks) were included as two additional continuous covariates in
+the summary table.
+
+\paragraph{Analyses.}
+Continuous covariates were summarized as mean (standard deviation) and categorical covariates
+as n (\%), stratified by pregnancy outcome. The distribution of \textit{LYN} expression was
+shown with a histogram, its association with vitamin D was measured with a Pearson correlation
+and a linear fit, and its expression by pregnancy outcome and obesity status was shown with
+boxplots. Ten genes (\textit{LYN}, \textit{JAK2}, \textit{PTX3} and the seven genes with the
+highest standard deviation of expression across all women among the 500 probes) were shown in a heatmap of
+row-scaled (z-score) expression, with hierarchical clustering of genes and samples (Euclidean
+distance, complete linkage). Finally, a dumbbell plot compared the mean z-score of the same ten
+genes between pregnancy outcomes. All analyses were descriptive.
+
+\paragraph{Software.}
+All analyses were performed in R version 4.5.3 \cite{R2026} with the packages ggplot2
+(v4.0.3) \cite{ggplot2}, ggpubr (v1.0.0) \cite{ggpubr}, pheatmap (v1.0.13) \cite{pheatmap}
+and knitr (v1.52) \cite{knitr}.
+
+\paragraph{Code availability.}
+All code is available at \url{https://github.com/cheonijin927/QBS103-Final-Project}.
+
+% =====================================================================
+\section{Results}
+
+\subsection{Participant characteristics}
+
+Women who developed preeclampsia had lower mean vitamin D levels than women with normal
+pregnancies (19.7 vs.\ 24.4 ng/mL), delivered earlier on average (37.8 vs.\ 39.3 weeks) and
+were more often obese (55.3\% vs.\ 28.2\%), while maternal age was similar between groups
+(25.8 vs.\ 26.6 years) (Table~\ref{tab:summary}).
+
+% Table made in R and saved as table1.tex (upload it to Overleaf next to this file)
+\input{table1.tex}
+
+\subsection{\textit{LYN} expression}
+
+\textit{LYN} expression was approximately symmetric around a mean of 12.18 log$_2$ units
+(Figure~\ref{fig:lyn}A). \textit{LYN} expression was positively associated with maternal
+vitamin D (Pearson $r$ = 0.39, $p$ $<$ 0.001; Figure~\ref{fig:lyn}B). Within each pregnancy
+outcome, median \textit{LYN} expression was slightly lower in obese than in non-obese women
+(normal: 12.05 vs.\ 12.26; preeclampsia: 12.23 vs.\ 12.30), but the differences were small
+and the groups overlapped substantially (Figure~\ref{fig:lyn}C).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{figures/Figure1_LYN.pdf}
+  \caption{\textit{LYN} expression in whole-blood samples from 157 pregnant women.
+  (A) Distribution of \textit{LYN} expression (log$_2$ intensity); the dashed line marks the
+  mean. (B) \textit{LYN} expression vs.\ maternal vitamin D (25-hydroxyvitamin D, ng/mL); each
+  point is one woman, the line is the linear fit with its 95\% confidence band, and the Pearson
+  correlation is shown in the upper left. (C) \textit{LYN} expression by pregnancy outcome and
+  obesity status (not obese, BMI $<$ 30 kg/m$^2$; obese, BMI $\geq$ 30 kg/m$^2$). Boxes show
+  the median and interquartile range, whiskers extend to 1.5 times the interquartile range, and
+  points are individual women.}
+  \label{fig:lyn}
+\end{figure}
+
+\subsection{Heatmap of ten genes}
+
+The ten genes shown were \textit{LYN}, \textit{JAK2}, \textit{PTX3}, \textit{UTS2},
+\textit{RUNDC3A}, \textit{TMEM176B}, \textit{CEACAM6}, \textit{CLIC2}, \textit{SLC1A5} and
+\textit{ZNF594}. Clustering grouped genes by their shared expression pattern across women, while women
+with preeclampsia and obese women were spread across the sample clusters rather than forming a
+separate group (Figure~\ref{fig:heatmap}).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{figures/Figure2_heatmap.pdf}
+  \caption{Heatmap of ten genes (\textit{LYN}, \textit{JAK2}, \textit{PTX3} and the seven most
+  variable genes in the data set) in 157 pregnant women. Each column is one woman and each row
+  is one gene. Colors show row-scaled expression (z-score of log$_2$ intensity; red is higher
+  and blue is lower than that gene's mean). Genes and women were clustered by hierarchical
+  clustering (Euclidean distance, complete linkage). Tracking bars show pregnancy outcome and
+  obesity status (not obese, BMI $<$ 30 kg/m$^2$; obese, BMI $\geq$ 30 kg/m$^2$).}
+  \label{fig:heatmap}
+\end{figure}
+
+\subsection{Mean expression by pregnancy outcome}
+
+Compared with normal pregnancies, mean expression in preeclampsia was most increased for
+\textit{UTS2} (difference in mean z-score, 0.21) and most decreased for \textit{RUNDC3A}
+($-$0.38). All differences were smaller than 0.4 standard deviations, indicating only modest
+differences between pregnancy outcomes for these genes (Figure~\ref{fig:dumbbell}).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{figures/Figure3_dumbbell.pdf}
+  \caption{Dumbbell plot of mean expression of the ten heatmap genes by pregnancy outcome.
+  Expression of each gene was converted to a z-score across all 157 women; points show the mean
+  z-score in normal pregnancies (green) and preeclampsia (pink), and the grey line shows the
+  difference between groups. Genes are ordered from the largest increase (top) to the largest
+  decrease (bottom) in preeclampsia.}
+  \label{fig:dumbbell}
+\end{figure}
+
+% =====================================================================
+\bibliographystyle{unsrt}
+\bibliography{references}
+
+\end{document}
